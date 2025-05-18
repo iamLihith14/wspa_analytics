@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -12,7 +13,7 @@ from windrose import WindroseAxes
 from io import BytesIO
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+from sklearn.metrics import r2_score
 
 # Configuration
 st.set_page_config(layout="wide", page_title="Wind Energy Analytics Dashboard", page_icon="🌬️")
@@ -32,70 +33,25 @@ st.markdown("""
     p, div {color: white !important;}
     label {color: white !important;}
     .st-bh, .st-bi, .st-bj, .st-bk {color: white !important;}
-    .error-message {color: #FF4B4B; font-weight: bold;}
-    .success-message {color: #4CAF50; font-weight: bold;}
-    .warning-message {color: #FFA500; font-weight: bold;}
-    .info-message {color: #1E90FF; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
 
 # API Functions
 @st.cache_data(ttl=3600)
 def get_coordinates(location):
-    """Get coordinates with strict validation"""
-    if not location or len(location.strip()) < 2:
-        return None, None, "Please enter a valid location name (e.g., 'Chicago, US')", None
-    
-    try:
-        url = f"https://nominatim.openstreetmap.org/search?q={location}&format=json"
-        headers = {"User-Agent": "WindEnergyApp/1.0"}
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        
-        data = response.json()
-        if not data:
-            return None, None, f"Location '{location}' not found. Please enter a valid city name.", None
-            
-        # Get the first result with valid coordinates and proper location type
-        for item in data:
-            try:
-                # Only accept cities, towns, villages, etc. - reject ambiguous results
-                item_type = item.get('type', '')
-                item_class = item.get('class', '')
-                
-                if item_type not in ['city', 'town', 'village', 'administrative']:
-                    continue
-                    
-                lat = float(item.get('lat', 0))
-                lon = float(item.get('lon', 0))
-                display_name = item.get('display_name', '')
-                
-                if (-90 <= lat <= 90 and -180 <= lon <= 180 and 
-                    ',' in display_name and len(display_name) > 5):
-                    return lat, lon, None, display_name.split(',')[0]
-            except (ValueError, TypeError):
-                continue
-                
-        return None, None, f"'{location}' doesn't appear to be a valid city name. Please try again with a proper location.", None
-    except Exception as e:
-        return None, None, f"API Error: {str(e)}", None
+    url = f"https://nominatim.openstreetmap.org/search?q={location}&format=json"
+    headers = {"User-Agent": "WindEnergyApp/1.0"}
+    response = requests.get(url, headers=headers)
+    data = response.json()
+    if data:
+        return float(data[0]['lat']), float(data[0]['lon'])
+    return None, None
 
 @st.cache_data(ttl=3600)
 def get_weather_data(lat, lon, days=2):
-    """Get weather data with validation"""
-    try:
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=wind_speed_10m,wind_direction_10m,temperature_2m,relative_humidity_2m,surface_pressure&forecast_days={days}"
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Validate the response contains required data
-        if not all(key in data.get('hourly', {}) for key in ['wind_speed_10m', 'wind_direction_10m', 'temperature_2m']):
-            return {"error": "Incomplete weather data received for this location"}
-            
-        return data
-    except Exception as e:
-        return {"error": str(e)}
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=wind_speed_10m,wind_direction_10m,temperature_2m,relative_humidity_2m,surface_pressure&forecast_days={days}"
+    response = requests.get(url)
+    return response.json()
 
 # Turbine Models
 class WindTurbine:
@@ -225,8 +181,8 @@ def show_sidebar_info():
     3. **Generation Analysis**: Estimate energy production
     
     **Data Sources**:
-    - Weather data from Open-Meteo
-    - Location data from OpenStreetMap
+    - Weather data from Open-Meteo API
+    - Location data from Nominatim
     """)
     
     st.sidebar.markdown("---")
@@ -271,10 +227,9 @@ def main():
     with st.expander("⚙️ Configuration Panel", expanded=True):
         col1, col2, col3 = st.columns(3)
         with col1:
-            location = st.text_input("📍 Location", "Chennai, India", 
-                                   help="Enter a valid city name and country (e.g., 'New York, US')")
+            location = st.text_input("📍 Location", "Chennai, India")
             days = st.slider("📅 Forecast Days", 1, 7, 3)
-            
+        
         with col2:
             turbine_model = st.selectbox("🌀 Turbine Model", list(TURBINES.keys()), index=0)
             if turbine_model == "Custom Turbine":
@@ -287,34 +242,18 @@ def main():
             analysis_type = st.selectbox("📊 Analysis Type", 
                                       ["Basic Forecast", "Technical Analysis", "Financial Evaluation"])
             show_raw_data = st.checkbox("📋 Show Raw Data CSV", False)
-            future_hours = st.slider("Select hours to predict ahead", 6, 48, 24, step=6,
-                                   help="Number of hours to predict wind speed into the future")
     
     if st.button("🚀 Analyze Wind Data"):
         with st.spinner("Fetching wind data and performing analysis..."):
-            # Data Acquisition with strict validation
-            lat, lon, error, display_name = get_coordinates(location)
-            
-            if error:
-                st.error(f"❌ {error}")
+            # Data Acquisition
+            lat, lon = get_coordinates(location)
+            if not lat or not lon:
+                st.error("Location not found. Please try a different location name.")
                 return
-                
-            st.success(f"🔍 Location found: {display_name} (Latitude: {lat:.4f}, Longitude: {lon:.4f})")
-            
-            # Add data source verification
-            with st.expander("🔎 Data Source Verification", expanded=True):
-                st.markdown(f"""
-                ### Data Reliability Assurance
-                
-                **Location Verification**:
-                - Coordinates sourced from OpenStreetMap's authoritative geocoding API
-                - Verified location: {display_name}
-                - Latitude/Longitude cross-validated with global geodetic standards (WGS84)
-                """)
             
             data = get_weather_data(lat, lon, days)
             if 'error' in data:
-                st.error(f"❌ Weather API Error: {data['error']}")
+                st.error(f"API Error: {data['error']}")
                 return
             
             # Data Processing
@@ -329,11 +268,6 @@ def main():
                 "Pressure (hPa)": data['hourly']['surface_pressure'][:hours]
             })
             
-            # Validate we got actual data
-            if df['Wind Speed (m/s)'].isnull().all():
-                st.error("❌ No valid wind data received for this location. Please try a different location.")
-                return
-                
             # Air Density Calculation
             df['Air Density (kg/m³)'] = calculate_air_density(
                 df['Temperature (°C)'], 
@@ -360,7 +294,7 @@ def main():
             model, features, test_accuracy = train_wind_speed_model(df.copy())
             
             # Dashboard Layout
-            st.success(f"✅ Analysis completed for {display_name}")
+            st.success(f"Analysis completed for {location} (Lat: {lat:.4f}, Lon: {lon:.4f})")
             
             # Key Metrics
             st.subheader("📊 Key Performance Indicators")
@@ -373,12 +307,6 @@ def main():
             # Show raw data CSV if requested
             if show_raw_data:
                 st.subheader("📋 Raw Data CSV")
-                st.markdown("""
-                **Data Description**:
-                - This table shows actual observed weather data from Open-Meteo API
-                - Contains measured values (not predictions) for wind speed, direction, and weather parameters
-                - Used as the foundation for all analytics and predictions in this dashboard
-                """)
                 st.dataframe(df)
                 
                 # Download data as CSV
@@ -386,7 +314,7 @@ def main():
                 st.download_button(
                     label="📥 Download Data as CSV",
                     data=csv,
-                    file_name=f"wind_data_{display_name.replace(' ','_')}.csv",
+                    file_name=f"wind_data_{location.replace(' ','_')}.csv",
                     mime="text/csv"
                 )
             
@@ -400,7 +328,7 @@ def main():
                 col1, col2 = st.columns(2)
                 with col1:
                     fig = px.line(df, x="Time", y="Wind Speed (m/s)", 
-                                title="Wind Speed Forecast - Hourly wind speed predictions",
+                                title="Wind Speed Forecast - Hourly wind speed predictions help identify optimal generation periods",
                                 template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
                 
@@ -418,7 +346,7 @@ def main():
                         )
                     ))
                     fig.update_layout(
-                        title="Wind Direction Analysis",
+                        title="Wind Direction Analysis - Polar plot shows prevailing wind directions for turbine placement",
                         polar=dict(radialaxis=dict(visible=True)),
                         template="plotly_dark",
                         showlegend=False
@@ -429,7 +357,7 @@ def main():
                 col1, col2 = st.columns(2)
                 with col1:
                     fig = px.histogram(df, x="Wind Speed (m/s)", nbins=20,
-                                     title="Wind Speed Distribution",
+                                     title="Wind Speed Distribution - Frequency analysis helps assess site potential",
                                      marginal="rug",
                                      template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
@@ -442,7 +370,7 @@ def main():
                     fig.add_trace(go.Histogram(x=df['Wind Speed (m/s)'], histnorm='probability density', 
                                             name="Actual Data", opacity=0.5))
                     fig.update_layout(
-                        title=f"Weibull Distribution (k={k:.2f}, A={A:.2f})",
+                        title=f"Weibull Distribution - Statistical model (k={k:.2f}, A={A:.2f}) predicts long-term wind potential",
                         xaxis_title="Wind Speed (m/s)",
                         yaxis_title="Probability Density",
                         template="plotly_dark"
@@ -455,14 +383,14 @@ def main():
                 with col1:
                     fig = px.scatter(df, x="Temperature (°C)", y="Wind Speed (m/s)", 
                                    color="Humidity (%)",
-                                   title="Weather Impact Analysis",
+                                   title="Weather Impact Analysis - Relationship between wind speed and temperature/humidity",
                                    trendline="lowess",
                                    template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
                 
                 with col2:
                     fig = px.density_heatmap(df, x="Time", y="Wind Speed (m/s)", 
-                                           title="Wind Speed Patterns",
+                                           title="Wind Speed Patterns - Heatmap reveals daily wind speed variations",
                                            nbinsx=24*days, nbinsy=20,
                                            template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
@@ -471,7 +399,7 @@ def main():
                 col1, col2 = st.columns(2)
                 with col1:
                     fig = px.scatter(df, x="Wind Speed (m/s)", y="Air Density (kg/m³)", 
-                                   title="Air Density Impact",
+                                   title="Air Density Impact - Higher density increases power generation potential",
                                    trendline="ols",
                                    template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
@@ -479,7 +407,7 @@ def main():
                 with col2:
                     fig = px.bar_polar(df, r="Wind Speed (m/s)", theta="Wind Direction",
                                       color="Wind Speed (m/s)",
-                                      title="Wind Rose Diagram",
+                                      title="Wind Rose Diagram - Directional analysis for optimal turbine orientation",
                                       template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
             
@@ -490,7 +418,7 @@ def main():
                 col1, col2 = st.columns(2)
                 with col1:
                     fig = px.area(df, x="Time", y="Power Output (kW)", 
-                                 title=f"{turbine_model} Performance",
+                                 title=f"{turbine_model} Performance - Hourly power output based on wind conditions",
                                  template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
                 
@@ -503,7 +431,7 @@ def main():
                     fig.add_vline(x=turbine.rated, line_dash="dash", annotation_text=f"Rated: {turbine.rated}m/s")
                     fig.add_vline(x=turbine.cut_out, line_dash="dash", annotation_text=f"Cut-out: {turbine.cut_out}m/s")
                     fig.update_layout(
-                        title=f"{turbine_model} Power Curve",
+                        title=f"{turbine_model} Power Curve - Shows performance characteristics at different wind speeds",
                         xaxis_title="Wind Speed (m/s)",
                         yaxis_title="Power Output (kW)",
                         template="plotly_dark"
@@ -515,7 +443,7 @@ def main():
                 with col1:
                     fig = px.scatter(df, x="Wind Speed (m/s)", y="Power Output (kW)", 
                                     color="Air Density (kg/m³)",
-                                    title="Power-Wind Relationship",
+                                    title="Power-Wind Relationship - How air density affects power generation",
                                     trendline="lowess",
                                     template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
@@ -531,7 +459,7 @@ def main():
                     fig.add_trace(go.Scatter(x=hourly_avg['Hour'], y=hourly_avg['Wind Speed (m/s)'], 
                                            name="Wind Speed", yaxis="y2"))
                     fig.update_layout(
-                        title="Daily Generation Pattern",
+                        title="Daily Generation Pattern - Shows typical hourly production profile",
                         xaxis_title="Hour of Day",
                         yaxis_title="Power Output (kW)",
                         yaxis2=dict(title="Wind Speed (m/s)", overlaying="y", side="right"),
@@ -548,13 +476,13 @@ def main():
                 with col1:
                     df['Cumulative Energy (kWh)'] = df['Energy Output (kWh)'].cumsum()
                     fig = px.area(df, x="Time", y="Cumulative Energy (kWh)", 
-                                 title="Energy Production Timeline",
+                                 title="Energy Production Timeline - Total energy generated over the forecast period",
                                  template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
                 
                 with col2:
                     fig = px.box(df, x=df['Time'].dt.day_name(), y="Energy Output (kWh)", 
-                               title="Daily Energy Variability",
+                               title="Daily Energy Variability - Shows distribution of generation by day of week",
                                color=df['Time'].dt.day_name(),
                                template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
@@ -565,7 +493,7 @@ def main():
                 with col1:
                     fig = px.scatter(df, x="Wind Speed (m/s)", y="Energy Output (kWh)", 
                                     trendline="ols",
-                                    title="Energy-Wind Correlation",
+                                    title="Energy-Wind Correlation - Strong correlation indicates wind-driven generation",
                                     trendline_color_override="red",
                                     template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
@@ -575,41 +503,31 @@ def main():
                     fig = go.Figure(go.Indicator(
                         mode="gauge+number",
                         value=capacity_factor,
-                        title="Capacity Factor",
+                        title="Capacity Factor - Percentage of maximum possible generation",
                         gauge={'axis': {'range': [0, 100]}},
                         domain={'x': [0, 1], 'y': [0, 1]}
                     ))
                     fig.update_layout(template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
 
+
             with tab4:
                 st.subheader("🔮 Advanced Wind Speed Prediction")
-
-                with st.expander("📚 About Wind Speed Prediction Model", expanded=False):
-                    st.markdown(f"""
-                    ### Wind Speed Prediction Methodology
-                    
-                    **Algorithm Used**: Random Forest Regressor with 200 decision trees
-                    
-                    **Model Accuracy (R² Score)**: {test_accuracy:.2%}
-                    
-                    **Key Features Used for Prediction**:
-                    - Temporal Features: Hour (sin/cos), Day of Week, Day of Year, Month
-                    - Weather Parameters: Temperature, Humidity, Pressure
-                    - Lag Features: Previous 3 hours of wind speed data
-                    
-                    **Wind Speed Forecast with Confidence Bands**:
-                    The prediction model provides:
-                    - ŷ(t) = Predicted wind speed at time t (central line)
-                    - Upper Bound = ŷ(t) × 1.05 (5% higher)
-                    - Lower Bound = ŷ(t) × 0.95 (5% lower)
-                    
-                    This represents the model's uncertainty range, showing where future wind speeds are likely to fall.
-                    """)
-                    
-                    st.info("💡 The model achieves high accuracy by analyzing complex relationships between weather parameters and temporal patterns.")
+                
+                # Enhanced model description
+                st.markdown("""
+                **Prediction Methodology:**
+                - Uses Random Forest Regressor with 200 trees
+                - Trained on historical wind patterns, temperature, humidity, and pressure
+                - Incorporates temporal features (hourly, daily, weekly patterns)
+                - Includes lag features (previous wind speeds) for improved accuracy
+                - Model R² Score: {:.2%}
+                """.format(test_accuracy))
+                
+                st.info("💡 The model achieves high accuracy by analyzing complex relationships between weather parameters and temporal patterns.")
                 
                 # Predict future wind speeds
+                future_hours = st.slider("Select hours to predict ahead", 6, 48, 24, step=6)
                 last_data_point = df.iloc[-1].to_dict()
                 future_times, future_wind = predict_future_wind(model, features, last_data_point, future_hours)
                 
@@ -672,153 +590,6 @@ def main():
                 with st.expander("View Detailed Prediction Data"):
                     st.dataframe(pred_df)
 
-                st.subheader("🔍 Wind Speed Prediction Validation: Model vs Reality")
-
-                # Explanation section with performance comparison focus
-                with st.expander("🔬 Model Performance Benchmark", expanded=True):
-                    st.markdown("""
-                    ### How Accurate Are Our Predictions?
                     
-                    We rigorously test our model by comparing its predictions against actual observed wind speeds:
-                    
-                    **Validation Process**:
-                    1. Trained on 80% of historical weather data
-                    2. Tested on the most recent 20% of data
-                    3. Compared predictions against real measurements
-                    4. Calculated industry-standard accuracy metrics
-                    
-                    **Performance Indicators**:
-                    - 🎯 MAE: How close predictions are to reality (lower is better)
-                    - 📏 RMSE: How large prediction errors are (penalizes big mistakes)
-                    - 📊 R²: How well the model explains wind speed variations
-                    """)
-
-                st.info("💡 This validation uses the same model that powers our future predictions, ensuring reliable forecasts")
-
-                # Get historical data for validation
-                with st.spinner("🔍 Analyzing historical wind patterns..."):
-                    historical_data = get_weather_data(lat, lon, days=5)
-                    hist_df = pd.DataFrame({
-                        "Time": pd.to_datetime(historical_data['hourly']['time']),
-                        "Actual Wind Speed (m/s)": historical_data['hourly']['wind_speed_10m'],
-                        "Wind Direction": historical_data['hourly']['wind_direction_10m'],
-                        "Temperature (°C)": historical_data['hourly']['temperature_2m'],
-                        "Humidity (%)": historical_data['hourly']['relative_humidity_2m'],
-                        "Pressure (hPa)": historical_data['hourly']['surface_pressure']
-                    })
-                    
-                    # Feature engineering
-                    hist_df['hour'] = hist_df['Time'].dt.hour
-                    hist_df['hour_sin'] = np.sin(2 * np.pi * hist_df['hour']/24)
-                    hist_df['hour_cos'] = np.cos(2 * np.pi * hist_df['hour']/24)
-                    hist_df['day_of_week'] = hist_df['Time'].dt.dayofweek
-                    hist_df['day_of_year'] = hist_df['Time'].dt.dayofyear
-                    hist_df['month'] = hist_df['Time'].dt.month
-                    hist_df['wind_speed_lag1'] = hist_df['Actual Wind Speed (m/s)'].shift(1)
-                    hist_df['wind_speed_lag2'] = hist_df['Actual Wind Speed (m/s)'].shift(2)
-                    hist_df['wind_speed_lag3'] = hist_df['Actual Wind Speed (m/s)'].shift(3)
-                    hist_df = hist_df.dropna()
-                    
-                    # Train-test split (most recent 20% for testing)
-                    test_size = int(len(hist_df) * 0.2)
-                    train_df = hist_df.iloc[:-test_size]
-                    test_df = hist_df.iloc[-test_size:]
-                    
-                    # Model training
-                    X_train = train_df[features]
-                    y_train = train_df['Actual Wind Speed (m/s)']
-                    model.fit(X_train, y_train)
-                    
-                    # Make predictions
-                    X_test = test_df[features]
-                    test_df['Predicted Wind Speed (m/s)'] = model.predict(X_test)
-
-                # Metrics calculation
-                y_test = test_df['Actual Wind Speed (m/s)']
-                y_pred = test_df['Predicted Wind Speed (m/s)']
-                mae = np.mean(np.abs(y_test - y_pred))
-                rmse = np.sqrt(np.mean((y_test - y_pred)**2))
-                r2 = r2_score(y_test, y_pred)
-
-                # Performance comparison cards
-                st.subheader("📊 Model Performance Report Card")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Mean Absolute Error", 
-                            f"{mae:.2f} m/s", 
-                            help="Average prediction error magnitude",
-                            delta=f"{(mae/np.mean(y_test))*100:.1f}% of average wind speed",
-                            delta_color="inverse")
-                
-                with col2:
-                    st.metric("Root Mean Squared Error", 
-                            f"{rmse:.2f} m/s", 
-                            help="Standard deviation of prediction errors",
-                            delta=f"{(rmse/np.mean(y_test))*100:.1f}% of average wind speed",
-                            delta_color="inverse")
-                
-                with col3:
-                    st.metric("Model Accuracy (R²)", 
-                            f"{r2:.2f}", 
-                            help="Proportion of wind speed variance explained",
-                            delta=f"{(r2*100):.0f}% variance explained",
-                            delta_color="normal")
-
-                # Comparison visualization
-                st.subheader("🔄 Side-by-Side Comparison: Predictions vs Reality")
-                
-                tab1, tab2 = st.tabs(["📈 Time Series Comparison", "📊 Scatter Analysis"])
-                
-                with tab1:
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        x=test_df['Time'],
-                        y=test_df['Actual Wind Speed (m/s)'],
-                        name='Actual Measurements',
-                        line=dict(color='#636EFA', width=3)
-                    ))
-                    fig.add_trace(go.Scatter(
-                        x=test_df['Time'],
-                        y=test_df['Predicted Wind Speed (m/s)'],
-                        name='Model Predictions',
-                        line=dict(color='#EF553B', width=2, dash='dot')
-                    ))
-                    fig.update_layout(
-                        title="Time Series Comparison: How Well Do Predictions Track Reality?",
-                        xaxis_title="Time",
-                        yaxis_title="Wind Speed (m/s)",
-                        template="plotly_dark",
-                        hovermode="x unified",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02)
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
-                with tab2:
-                    fig = px.scatter(
-                        test_df,
-                        x='Actual Wind Speed (m/s)',
-                        y='Predicted Wind Speed (m/s)',
-                        trendline="ols",
-                        title="Prediction Accuracy Analysis: Perfect predictions would lie on the diagonal",
-                        labels={
-                            'Actual Wind Speed (m/s)': 'Measured Wind Speed (m/s)',
-                            'Predicted Wind Speed (m/s)': 'Model Prediction (m/s)'
-                        },
-                        template="plotly_dark"
-                    )
-                    fig.add_shape(
-                        type="line",
-                        x0=min(y_test), y0=min(y_test),
-                        x1=max(y_test), y1=max(y_test),
-                        line=dict(color="#00CC96", width=3, dash="dash"),
-                        name="Perfect Prediction"
-                    )
-                    fig.update_traces(
-                        marker=dict(size=8, opacity=0.7, line=dict(width=1, color='DarkSlateGrey'))
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
- 
-
 if __name__ == "__main__":
     main()
