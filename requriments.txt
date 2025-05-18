@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+plotly
+scipy
+requests
+matplotlib
+windrose
+fpdf2
+statsmodels
+scikit-learn
